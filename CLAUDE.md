@@ -30,7 +30,7 @@ deadlines, and emails reminders before they expire.
 | ORM | Prisma |
 | Auth | NextAuth with Google provider (Gmail scopes) |
 | Email ingest | Gmail API (`gmail.readonly`) |
-| Parsing | Tiered: structured-data extraction (schema.org `Order`/`Product` markup) primary, free, no external call — **Phase 1, in progress**. LLM fallback (OpenAI `gpt-5-nano`) for emails Tier 1 misses — **deferred** until Phase 1's real hit-rate is measured against a live inbox. |
+| Parsing | Tiered: structured-data extraction (schema.org `Order`/`Product` markup) — **done**, kept as a free first check (tested at 0/60 hits on a real inbox — see Current status). LLM fallback (OpenAI `gpt-5-nano`) for emails Tier 1 misses — **next up**, not yet implemented. |
 | Job queue | BullMQ + Redis |
 | Outbound email | Nodemailer (Resend or SMTP in prod) |
 | Hosting | Vercel (app) + Neon or Supabase (Postgres) |
@@ -48,7 +48,7 @@ Gmail API: search for order confirmations
         ↓
 Each candidate email → Tier 1: structured-data extraction (schema.org, local, free)
         ↓ (miss)
-                Tier 2: LLM fallback (OpenAI gpt-5-nano) — deferred, not yet built
+                Tier 2: LLM fallback (OpenAI gpt-5-nano) — next up, not yet built
         ↓
 Either tier's output → validated with Zod → structured JSON
         ↓
@@ -95,8 +95,8 @@ a result.
    microdata) out of the email's raw HTML. Local, free, no external call. A
    result is only accepted if every required field is present — a partial
    match returns `null` (miss), never a partial `Purchase` row.
-2. **Tier 2 — LLM fallback** (deferred, not yet built; provider decided —
-   OpenAI `gpt-5-nano` — but not implemented). Only runs when Tier 1 misses
+2. **Tier 2 — LLM fallback** (next up — provider decided, OpenAI
+   `gpt-5-nano`; not yet implemented). Only runs when Tier 1 misses
    *and* an API key is configured; otherwise the candidate is logged and
    skipped, not an error. Gets the email subject, sender, date, and
    plain-text body only (HTML stripped first, whichever tier — never send
@@ -146,18 +146,26 @@ and item 3 (`lib/gmail.ts` — `searchCandidateEmails` / `fetchMessage`
 implemented, `GmailNotConnectedError` normalizes both "never connected" and
 "refresh token revoked/expired").
 
-In progress: item 4 (parsing), restructured as two tiers instead of a single
-Claude call — see "Parsing rules" above. **Phase 1** (current work):
-`lib/structuredData.ts` (new), `GmailMessage.bodyHtml` added to
-`lib/gmail.ts`, `lib/retailers.ts` implemented, `lib/parse.ts` wired to Tier
-1 only. Phase 1 is being tested against a real inbox specifically to measure
-the structured-data hit rate — that number decides whether Tier 2 is worth
-building at all. **Tier 2** (deferred): `lib/claude.ts` remains an
-unimplemented stub for now and will be renamed to `lib/openai.ts`
-(`parseEmailWithOpenAI`, model `gpt-5-nano`) if/when Tier 2 gets built;
-`ANTHROPIC_API_KEY` / `@anthropic-ai/sdk` are being phased out in favor of
-`OPENAI_API_KEY` / `openai`, not yet changed in `.env.example` or
-`package.json`.
+Item 4 (parsing) is restructured as two tiers instead of a single Claude
+call — see "Parsing rules" above. **Tier 1 is done and tested**:
+`lib/structuredData.ts` (schema.org extraction), `GmailMessage.bodyHtml` in
+`lib/gmail.ts`, `lib/retailers.ts` (`getRetailerPolicy`), and `lib/parse.ts`
+wired to Tier 1 → Zod → retailer-policy fallback. Tested against 60 real
+Gmail-search candidates (3 pages) from a live connected inbox — result
+independently reproduced, not just reported: **0 hits, 60 misses**.
+Confirmed not an extractor bug (`bodyHtml` was populated, 39–132KB per
+message; zero contained any `ld+json` or `schema.org` reference at all) —
+this inbox's real order-confirmation emails simply don't carry schema.org
+markup. Conclusion: Tier 1 stays in the codebase as a free first check (costs
+nothing per email, doesn't hurt) but isn't sufficient alone — moving to
+Tier 2.
+
+**Tier 2 — next up, not yet implemented.** Provider decided: OpenAI
+`gpt-5-nano`. `lib/claude.ts` remains the unimplemented stub for now and
+will be renamed to `lib/openai.ts` (`parseEmailWithOpenAI`) when this
+lands; `ANTHROPIC_API_KEY` / `@anthropic-ai/sdk` will be replaced with
+`OPENAI_API_KEY` / `openai` in `.env.example` / `package.json` at the same
+time — none of that is changed yet.
 
 Still stubbed, untouched: `lib/email.ts`, `daysRemainingUTC` in
 `lib/dates.ts`. `/api/sync` and `/api/cron/reminders` still return 501.
