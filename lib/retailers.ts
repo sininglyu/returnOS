@@ -4,13 +4,17 @@
 // ~8 major retailers via prisma/seed.ts (V1 checklist item 8).
 
 import type { RetailerPolicy } from "@prisma/client";
+import { prisma } from "./db";
 
-// TODO(item 8): implement via prisma (lib/db.ts) — look up by retailer name
-// (case-insensitive match against however lib/parse.ts normalizes Claude's
-// `retailer` field).
-
+// Case-insensitive exact match against the seeded table. lib/parse.ts
+// trims the retailer string before calling this. Fuzzy matching (e.g. a
+// parsed "Amazon.com" not matching the seeded "Amazon") is a known V1
+// limitation, not solved here - consistent with "do not build past this
+// line."
 export async function getRetailerPolicy(
-  _retailer: string,
+  retailer: string,
 ): Promise<RetailerPolicy | null> {
-  throw new Error("not implemented");
+  return prisma.retailerPolicy.findFirst({
+    where: { retailer: { equals: retailer, mode: "insensitive" } },
+  });
 }

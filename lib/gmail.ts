@@ -157,6 +157,11 @@ export interface GmailMessage {
   from: string;
   date: string;
   bodyText: string;
+  // Raw HTML body, when present. Only lib/structuredData.ts (Tier 1 -
+  // schema.org extraction) reads this; it inspects markup that gets
+  // stripped out of bodyText. Never send this to an external model -
+  // bodyText (already stripped) is what leaves this process.
+  bodyHtml: string;
 }
 
 function getHeader(
@@ -173,12 +178,19 @@ function decodeBase64Url(data: string): string {
   return Buffer.from(data, "base64url").toString("utf8");
 }
 
-// Walks a message payload's MIME tree looking for a text/plain part first,
-// falling back to text/html (stripped, see stripHtml) only if no
-// plain-text alternative exists anywhere. Most order-confirmation emails
-// carry both, so the HTML fallback path is rarely hit in practice.
-function extractBody(payload: gmail_v1.Schema$MessagePart | undefined): string {
-  if (!payload) return "";
+interface ExtractedBody {
+  bodyText: string;
+  bodyHtml: string;
+}
+
+// Walks a message payload's MIME tree looking for a text/plain part
+// (-> bodyText) and a text/html part (-> bodyHtml, raw - Tier 1 structured
+// data extraction needs it before stripping). If there's no text/plain
+// alternative, bodyText falls back to the stripped HTML (see stripHtml) -
+// most order-confirmation emails carry both, so this fallback path is
+// rarely hit in practice.
+function extractBody(payload: gmail_v1.Schema$MessagePart | undefined): ExtractedBody {
+  if (!payload) return { bodyText: "", bodyHtml: "" };
 
   let plainText: string | null = null;
   let htmlText: string | null = null;
@@ -204,9 +216,10 @@ function extractBody(payload: gmail_v1.Schema$MessagePart | undefined): string {
 
   walk(payload);
 
-  if (plainText !== null) return plainText;
-  if (htmlText !== null) return stripHtml(htmlText);
-  return "";
+  const bodyHtml = htmlText ?? "";
+  const bodyText =
+    plainText ?? (htmlText !== null ? stripHtml(htmlText) : "");
+  return { bodyText, bodyHtml };
 }
 
 const HTML_ENTITIES: Record<string, string> = {
@@ -253,11 +266,14 @@ export async function fetchMessage(
 
   console.log("gmail: fetched message", { userId, messageId });
 
+  const { bodyText, bodyHtml } = extractBody(data.payload ?? undefined);
+
   return {
     id: messageId,
     subject: getHeader(headers, "Subject"),
     from: getHeader(headers, "From"),
     date: getHeader(headers, "Date"),
-    bodyText: extractBody(data.payload ?? undefined),
+    bodyText,
+    bodyHtml,
   };
 }

@@ -30,7 +30,7 @@ deadlines, and emails reminders before they expire.
 | ORM | Prisma |
 | Auth | NextAuth with Google provider (Gmail scopes) |
 | Email ingest | Gmail API (`gmail.readonly`) |
-| Parsing | Claude API (`claude-sonnet-4-6`) |
+| Parsing | Tiered: structured-data extraction (schema.org `Order`/`Product` markup) primary, free, no external call — **Phase 1, in progress**. LLM fallback (OpenAI `gpt-5-nano`) for emails Tier 1 misses — **deferred** until Phase 1's real hit-rate is measured against a live inbox. |
 | Job queue | BullMQ + Redis |
 | Outbound email | Nodemailer (Resend or SMTP in prod) |
 | Hosting | Vercel (app) + Neon or Supabase (Postgres) |
@@ -46,7 +46,11 @@ Sync job enqueued (BullMQ)
         ↓
 Gmail API: search for order confirmations
         ↓
-Each candidate email → Claude API → structured JSON
+Each candidate email → Tier 1: structured-data extraction (schema.org, local, free)
+        ↓ (miss)
+                Tier 2: LLM fallback (OpenAI gpt-5-nano) — deferred, not yet built
+        ↓
+Either tier's output → validated with Zod → structured JSON
         ↓
 Upsert into `purchases` table with computed return deadline
         ↓
@@ -81,13 +85,30 @@ must never create duplicate purchases.
 
 ## Parsing rules
 
-- Claude gets the email subject, sender, date, and plain-text body (HTML
-  stripped first — do not send raw HTML, it wastes tokens).
-- Prompt must demand **JSON only**, no prose, no markdown fences.
-- Response must be validated with Zod before it touches the database. A parse
-  that fails validation is logged and skipped, never inserted.
-- If the email is not a purchase confirmation, the model returns
-  `{ "isPurchase": false }` and the row is skipped.
+Two tiers, tried in order. Both produce the same `ParseResult` shape and go
+through the same Zod validation — nothing downstream (Purchase upsert,
+retailer-policy fallback, deadline math) knows or cares which tier produced
+a result.
+
+1. **Tier 1 — structured-data extraction** (`lib/structuredData.ts`, Phase 1,
+   in progress). Parses schema.org `Order`/`Product` markup (JSON-LD or
+   microdata) out of the email's raw HTML. Local, free, no external call. A
+   result is only accepted if every required field is present — a partial
+   match returns `null` (miss), never a partial `Purchase` row.
+2. **Tier 2 — LLM fallback** (deferred, not yet built; provider decided —
+   OpenAI `gpt-5-nano` — but not implemented). Only runs when Tier 1 misses
+   *and* an API key is configured; otherwise the candidate is logged and
+   skipped, not an error. Gets the email subject, sender, date, and
+   plain-text body only (HTML stripped first, whichever tier — never send
+   raw HTML to a model, it wastes tokens). Structured-output JSON, validated
+   the same way as Tier 1's result.
+- Response must be validated with Zod before it touches the database,
+  regardless of tier. A parse that fails validation is logged and skipped,
+  never inserted.
+- If an email is not a purchase confirmation, the result is treated as
+  `isPurchase: false` and the row is skipped. Note: Tier 1 alone can't
+  distinguish "not a purchase" from "a purchase with no embedded markup" —
+  both just read as a miss until Tier 2 exists.
 - Return window: prefer the deadline stated in the email. If absent, fall back
   to a retailer policy table. If the retailer is unknown, mark
   `returnDeadline: null` and surface it as "policy unknown" in the UI.
@@ -96,14 +117,15 @@ must never create duplicate purchases.
 
 ## V1 scope — do not build past this line
 
-- [ ] Google sign-in with Gmail readonly scope
+- [x] Google sign-in with Gmail readonly scope
 - [ ] Manual "Sync now" button (no background sync yet)
-- [ ] Gmail search + fetch for order confirmations
-- [ ] Claude parsing endpoint with Zod validation
+- [x] Gmail search + fetch for order confirmations
+- [ ] Parsing endpoint with Zod validation (tiered: structured-data extraction
+      first, LLM fallback deferred — see "Parsing rules")
 - [ ] Purchases list UI sorted by days remaining
 - [ ] Mark as returned / keeping
 - [ ] Daily cron + reminder email at 7 days and 2 days out
-- [ ] Retailer policy table seeded with ~8 major retailers
+- [x] Retailer policy table seeded with ~8 major retailers (`prisma/seed.ts`)
 
 **Explicitly out of scope for V1:** drop-off location maps, route optimization,
 return label generation, refund tracking, mobile app, multi-account support.
@@ -113,15 +135,33 @@ return label generation, refund tracking, mobile app, multi-account support.
 ## Current status
 
 Project scaffold is done: Next.js/Prisma/NextAuth wired up, schema in place,
-`prisma/seed.ts` seeds retailer policies + demo purchases. All business logic
-is stubbed (`lib/gmail.ts`, `lib/claude.ts`, `lib/parse.ts`,
-`lib/retailers.ts`, `lib/email.ts`, `daysRemainingUTC` in `lib/dates.ts`) and
-the `/api/sync` and `/api/cron/reminders` routes return 501. `app/page.tsx`
-is still the default `create-next-app` placeholder.
+`prisma/seed.ts` seeds retailer policies + demo purchases.
 
-Next task: finish item 1 (Google sign-in scopes — `auth.ts` needs
-`access_type=offline`, `prompt=consent`, and the Gmail readonly scope
-confirmed) and item 3 (`lib/gmail.ts`), since most other stubs depend on it.
+Done and verified against a real connected account: item 1 (Google sign-in —
+`auth.ts` has `access_type=offline`, `prompt=consent`, `gmail.readonly`
+scope; note the OAuth consent screen is intentionally left in Google's
+"Testing" publishing status, not published — see `auth.ts` comments — so
+refresh tokens hard-expire every 7 days and sign-in may need to be repeated)
+and item 3 (`lib/gmail.ts` — `searchCandidateEmails` / `fetchMessage`
+implemented, `GmailNotConnectedError` normalizes both "never connected" and
+"refresh token revoked/expired").
+
+In progress: item 4 (parsing), restructured as two tiers instead of a single
+Claude call — see "Parsing rules" above. **Phase 1** (current work):
+`lib/structuredData.ts` (new), `GmailMessage.bodyHtml` added to
+`lib/gmail.ts`, `lib/retailers.ts` implemented, `lib/parse.ts` wired to Tier
+1 only. Phase 1 is being tested against a real inbox specifically to measure
+the structured-data hit rate — that number decides whether Tier 2 is worth
+building at all. **Tier 2** (deferred): `lib/claude.ts` remains an
+unimplemented stub for now and will be renamed to `lib/openai.ts`
+(`parseEmailWithOpenAI`, model `gpt-5-nano`) if/when Tier 2 gets built;
+`ANTHROPIC_API_KEY` / `@anthropic-ai/sdk` are being phased out in favor of
+`OPENAI_API_KEY` / `openai`, not yet changed in `.env.example` or
+`package.json`.
+
+Still stubbed, untouched: `lib/email.ts`, `daysRemainingUTC` in
+`lib/dates.ts`. `/api/sync` and `/api/cron/reminders` still return 501.
+`app/page.tsx` is still the default `create-next-app` placeholder.
 
 ---
 
@@ -141,8 +181,11 @@ npm run typecheck
 
 - Server-side logic lives in `lib/`, not in route handlers. Route handlers
   parse input, call a `lib/` function, and format the response.
-- Every external call (Gmail, Claude, SMTP) is wrapped in a function in
-  `lib/` so it can be mocked in tests.
+- Every external call (Gmail, the LLM fallback tier, SMTP) is wrapped in a
+  function in `lib/` so it can be mocked in tests. Tier 1 parsing
+  (`lib/structuredData.ts`) makes no external call at all — pure local
+  parsing, no wrapper needed for mocking, though it still lives in `lib/`
+  per the "server-side logic lives in `lib/`" rule above.
 - Dates stored as UTC. Deadline math done in `lib/dates.ts`, never inline.
 
 <!-- BEGIN:nextjs-agent-rules -->
