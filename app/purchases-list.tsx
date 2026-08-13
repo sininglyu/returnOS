@@ -6,6 +6,7 @@
 
 import { getPurchasesForUser } from "@/lib/purchases";
 import { daysRemainingUTC } from "@/lib/dates";
+import { PurchaseActions } from "./purchase-actions";
 import type { Purchase } from "@prisma/client";
 
 function formatPrice(purchase: Purchase): string | null {
@@ -75,6 +76,7 @@ export async function PurchasesList({ userId }: { userId: string }) {
               <span className="text-xs uppercase text-gray-400">
                 {purchase.status}
               </span>
+              <PurchaseActions purchaseId={purchase.id} status={purchase.status} />
             </div>
           </li>
         );

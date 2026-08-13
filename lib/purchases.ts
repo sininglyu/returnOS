@@ -3,7 +3,7 @@
 // a purchases query too.
 
 import { prisma } from "./db";
-import type { Purchase } from "@prisma/client";
+import type { Purchase, PurchaseStatus } from "@prisma/client";
 
 // Sort by status first, then deadline - NOT deadline alone. A plain
 // ascending sort on returnDeadline puts old RETURNED/EXPIRED/KEEPING rows
@@ -21,4 +21,23 @@ export function getPurchasesForUser(userId: string): Promise<Purchase[]> {
       { returnDeadline: { sort: "asc", nulls: "last" } },
     ],
   });
+}
+
+// Item 6: mark a purchase RETURNED or KEEPING. Deliberately narrower than
+// the full PurchaseStatus union - RETURNABLE is the creation default and
+// EXPIRED is item 7's cron comparing deadline to now; neither is a
+// user-facing choice through this path. `updateMany` with { id, userId }
+// in the where clause does the ownership check and the update in one
+// query - no separate find-then-check race window, and a wrong/foreign id
+// just yields count 0 (mapped to 404 by the route), no existence leak.
+export async function updatePurchaseStatus(
+  userId: string,
+  purchaseId: string,
+  status: Extract<PurchaseStatus, "RETURNED" | "KEEPING">,
+): Promise<boolean> {
+  const result = await prisma.purchase.updateMany({
+    where: { id: purchaseId, userId },
+    data: { status },
+  });
+  return result.count > 0;
 }

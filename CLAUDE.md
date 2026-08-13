@@ -125,7 +125,7 @@ a result.
 - [x] Parsing endpoint with Zod validation (tiered: structured-data extraction
       first, LLM fallback — see "Parsing rules")
 - [x] Purchases list UI sorted by days remaining
-- [ ] Mark as returned / keeping
+- [x] Mark as returned / keeping
 - [ ] Daily cron + reminder email at 7 days and 2 days out
 - [x] Retailer policy table seeded with ~8 major retailers (`prisma/seed.ts`)
 
@@ -292,9 +292,45 @@ window passed"` in gray (not a miss — most of this inbox's Amazon orders
 predate the 30-day window), and GolfNow still shows `policy unknown`.
 `npm run typecheck` and `npm run lint` both pass clean.
 
+**Item 6 (mark as returned/keeping) — done, tested against the real
+signed-in inbox end-to-end.** `lib/purchases.ts`'s `updatePurchaseStatus`
+only ever sets `RETURNED` or `KEEPING` — `RETURNABLE` (creation default)
+and `EXPIRED` (item 7's future cron) are system-managed, not reachable
+through this path. It does the ownership check and the update in one
+`updateMany({ where: { id, userId } })` call — no find-then-check race
+window, and a wrong or another user's purchase id just yields `count: 0`,
+mapped to a `404` with no existence leak. `app/api/purchases/[id]/route.ts`
+(new, `PATCH`) follows `/api/sync`'s exact conventions — same
+auth/Zod/`{ error }`+status shapes. `app/purchase-actions.tsx` (new client
+component, colocated like `sync-button.tsx`) renders "Mark returned" /
+"Keeping it" buttons with a `window.confirm()` guard, and renders nothing
+once a row is already `RETURNED`/`KEEPING` — **no undo back to
+`RETURNABLE` in V1**, and no switching between `RETURNED`/`KEEPING`
+either, by design (the API would technically allow it, nothing in the UI
+exposes it). Wired into `app/purchases-list.tsx`'s status column;
+`purchases-list.tsx` itself stays a server component, same
+server/client-leaf pattern `app/page.tsx` already uses for `<SyncButton
+/>`.
+
+Verified live, not just typechecked: marked one real row RETURNED and
+another KEEPING in the signed-in browser (Playwright) — both sank to the
+bottom of the list (confirms `getPurchasesForUser`'s `status asc` sort
+still works correctly on real mutated data) and lost their action buttons.
+Directly `PATCH`'d a nonexistent id and a real id belonging to the other
+(demo-seed) user — both returned a real `404`, and the demo row's status
+was independently confirmed unchanged in the DB afterward, not just
+inferred from the response. Then clicked "Sync now" again and confirmed in
+the browser that both rows were still `RETURNED`/`KEEPING`, not reverted —
+this is the exact guarantee `app/api/sync/route.ts`'s upsert comment was
+already written to protect ("a re-sync matching an existing
+`gmailMessageId` must not silently undo a user's RETURNED/KEEPING
+choice"), now with a real regression check behind it instead of just a
+comment. `npm run typecheck` and `npm run lint` both pass clean (the new
+`RouteContext<"/api/purchases/[id]">` type resolved on the first
+`typecheck` run — no stale-generated-types issue in practice).
+
 Still stubbed, untouched: `lib/email.ts`. `/api/cron/reminders` still
-returns 501. Item 6 (mark as returned/keeping) has no mutation UI yet —
-item 5 is read-only.
+returns 501.
 
 ---
 
