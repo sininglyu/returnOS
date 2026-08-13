@@ -1,11 +1,12 @@
 "use client";
 
 // V1 item 2: manual "Sync now" button. Drives /api/sync in a loop, one
-// Gmail page per call, until the server reports done: true. Colocated with
-// app/page.tsx rather than in a components/ dir - no such dir exists yet
-// to justify one for a single component.
+// Gmail page per call, until the server reports done: true or the user
+// stops it. Colocated with app/page.tsx rather than in a components/ dir -
+// no such dir exists yet to justify one for a single component.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 interface SyncResponse {
   syncRunId: string;
@@ -13,27 +14,43 @@ interface SyncResponse {
   done: boolean;
   messagesScanned: number;
   purchasesFound: number;
+  resultSizeEstimate: number | null;
 }
 
 type Status =
   | { kind: "idle" }
-  | { kind: "running"; messagesScanned: number; purchasesFound: number }
-  | { kind: "done"; messagesScanned: number; purchasesFound: number }
+  | {
+      kind: "running" | "stopped" | "done";
+      messagesScanned: number;
+      purchasesFound: number;
+      resultSizeEstimate: number | null;
+    }
   | { kind: "not-connected" }
   | { kind: "error" };
 
 export function SyncButton() {
+  const router = useRouter();
   const [status, setStatus] = useState<Status>({ kind: "idle" });
+  // Ref, not state: the loop below reads this synchronously between
+  // awaits, and a state read inside that closure would see a stale value
+  // from when the loop started, not the click that happened mid-loop.
+  const stopRequested = useRef(false);
 
   const running = status.kind === "running";
 
   async function handleClick() {
-    setStatus({ kind: "running", messagesScanned: 0, purchasesFound: 0 });
+    stopRequested.current = false;
+    setStatus({
+      kind: "running",
+      messagesScanned: 0,
+      purchasesFound: 0,
+      resultSizeEstimate: null,
+    });
 
     let pageToken: string | null = null;
     let syncRunId: string | null = null;
 
-    // Client-side guard only (the `running` disabled-state above) against
+    // Client-side guard only (the `running` disabled-state below) against
     // double-clicks - no server-side lock. Fine for a single-user manual
     // button in V1.
     for (;;) {
@@ -67,7 +84,29 @@ export function SyncButton() {
           kind: "done",
           messagesScanned: data.messagesScanned,
           purchasesFound: data.purchasesFound,
+          resultSizeEstimate: data.resultSizeEstimate,
         });
+        // Re-run the server-rendered PurchasesList in place so new rows
+        // show up without a manual reload. Not called on error/not-connected
+        // below - nothing new was necessarily written there.
+        router.refresh();
+        return;
+      }
+
+      if (stopRequested.current) {
+        // The page that was already in flight above still ran server-side
+        // and its results are already saved - stopping here just means no
+        // further pages get requested. Same effect as closing the tab
+        // mid-sync; the SyncRun row is left with finishedAt: null, same as
+        // that case, and a later "Sync now" click starts a fresh run
+        // rather than resuming this one (no resume UI in V1).
+        setStatus({
+          kind: "stopped",
+          messagesScanned: data.messagesScanned,
+          purchasesFound: data.purchasesFound,
+          resultSizeEstimate: data.resultSizeEstimate,
+        });
+        router.refresh();
         return;
       }
 
@@ -75,19 +114,38 @@ export function SyncButton() {
         kind: "running",
         messagesScanned: data.messagesScanned,
         purchasesFound: data.purchasesFound,
+        resultSizeEstimate: data.resultSizeEstimate,
       });
     }
   }
 
+  function handleStop() {
+    stopRequested.current = true;
+  }
+
   return (
     <div className="flex flex-col items-center gap-2">
-      <button type="button" onClick={handleClick} disabled={running} className="underline">
-        {running ? "Syncing..." : "Sync now"}
-      </button>
+      <div className="flex gap-3">
+        <button type="button" onClick={handleClick} disabled={running} className="underline">
+          {running ? "Syncing..." : "Sync now"}
+        </button>
+        {running && (
+          <button type="button" onClick={handleStop} className="underline">
+            Stop
+          </button>
+        )}
+      </div>
 
-      {(status.kind === "running" || status.kind === "done") && (
+      {(status.kind === "running" ||
+        status.kind === "done" ||
+        status.kind === "stopped") && (
         <p className="text-sm text-gray-500">
-          {status.messagesScanned} scanned, {status.purchasesFound} found
+          {status.messagesScanned}
+          {status.resultSizeEstimate !== null
+            ? ` of ~${status.resultSizeEstimate}`
+            : ""}{" "}
+          scanned, {status.purchasesFound} found
+          {status.kind === "stopped" && " (stopped)"}
         </p>
       )}
       {status.kind === "not-connected" && (

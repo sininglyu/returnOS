@@ -42,8 +42,8 @@ deadlines, and emails reminders before they expire.
 ```
 User signs in with Google (NextAuth, Gmail readonly scope)
         ↓
-Sync job enqueued (BullMQ)
-        ↓
+Sync job enqueued (BullMQ) — target architecture; V1 uses the manual
+        ↓                    "Sync now" button (app/api/sync) instead, done
 Gmail API: search for order confirmations
         ↓
 Each candidate email → Tier 1: structured-data extraction (schema.org, local, free)
@@ -120,11 +120,11 @@ a result.
 ## V1 scope — do not build past this line
 
 - [x] Google sign-in with Gmail readonly scope
-- [ ] Manual "Sync now" button (no background sync yet)
+- [x] Manual "Sync now" button (no background sync yet)
 - [x] Gmail search + fetch for order confirmations
-- [ ] Parsing endpoint with Zod validation (tiered: structured-data extraction
-      first, LLM fallback deferred — see "Parsing rules")
-- [ ] Purchases list UI sorted by days remaining
+- [x] Parsing endpoint with Zod validation (tiered: structured-data extraction
+      first, LLM fallback — see "Parsing rules")
+- [x] Purchases list UI sorted by days remaining
 - [ ] Mark as returned / keeping
 - [ ] Daily cron + reminder email at 7 days and 2 days out
 - [x] Retailer policy table seeded with ~8 major retailers (`prisma/seed.ts`)
@@ -201,17 +201,100 @@ with Tier 1's 0/60, the two tiers together turn this inbox's 0% into a 10%
 hit rate on the sample — real signal, not saturated, but no longer zero.
 `npm run typecheck` and `npm run lint` both pass clean.
 
-Note this doesn't check off the V1 "Parsing endpoint with Zod validation"
-item below — that's `lib/parse.ts` wired into `/api/sync`, which still
-returns 501 and is untouched by this work. Both parsing tiers and their
-shared Zod validation are done and tested directly (not through an
-endpoint); wiring `/api/sync` up to call them is the next item, tracked
-together with the "Manual Sync now button" item since they're the same
-piece of work.
+At the time that paragraph was written, `lib/parse.ts` wasn't wired into
+`/api/sync` yet. It is now — see item 2 below, done in the same session.
 
-Still stubbed, untouched: `lib/email.ts`, `daysRemainingUTC` in
-`lib/dates.ts`. `/api/sync` and `/api/cron/reminders` still return 501.
-`app/page.tsx` is still the default `create-next-app` placeholder.
+**Item 2 (`/api/sync` + "Sync now" button) — done, tested against the real
+connected inbox end-to-end**, not just typechecked. `auth.ts` got a
+`session` callback (`session.user.id` was `undefined` before this — no
+route could have known which user to sync without it; `next-auth`'s
+`DefaultUser` type already declares `id?: string`, so no module
+augmentation was needed). `app/api/sync/route.ts` replaced the 501 stub:
+chunked (one Gmail page per call), Zod-validates its request body, skips
+messages already present in `Purchase` before ever calling
+`fetchMessage`/`parseCandidateEmail` (so a re-sync doesn't re-pay Tier 2
+OpenAI cost on unchanged mail), upserts on `@@unique([userId,
+gmailMessageId])` without letting `update` touch `status` (so a re-sync
+can't silently undo a `RETURNED`/`KEEPING` choice once item 6 exists), and
+has a catch-all error handler distinct from `GmailNotConnectedError` (409,
+"reconnect Google") so an unexpected failure still closes out the
+`SyncRun` row instead of leaving `finishedAt: null` forever.
+`app/sync-button.tsx` (new) drives the page loop client-side, with a Stop
+control and an approximate "`X` of `~Y` scanned" readout (`Y` = Gmail's own
+`resultSizeEstimate`, which is genuinely an estimate and can shift page to
+page — not a number this app computes itself).
+
+Real run against the live connected inbox: 156 messages scanned, 26
+purchases found, fully idempotent on a second click (0 new rows, dedup
+skip confirmed in logs). Per-message processing started fully sequential
+(~8s/message — one Gmail fetch + one Tier 2 OpenAI call each — 2.8min for
+one 20-message page) and was changed to bounded concurrency (chunks of 5
+via `Promise.all` in `app/api/sync/route.ts`'s `processMessage`): measured
+168s → 61.8s on the same live inbox, a ~2.7x speedup, not the naive 5x —
+expected, not a bug, since concurrent calls for one user still contend on
+shared things (Gmail token refresh, the DB connection pool).
+
+**Item 5 (purchases list UI) — done, verified both statically and against
+the real signed-in browser render.** `lib/purchases.ts`
+(`getPurchasesForUser`) sorts `status asc, returnDeadline asc nulls last` —
+not deadline alone, which would put old RETURNED/EXPIRED/KEEPING rows
+(large negative days-remaining) ahead of an actionable RETURNABLE row with
+2 days left; confirmed against the live DB that `RETURNABLE` is
+`enumsortorder 1`, so `status asc` alone already surfaces every actionable
+row before resolved ones. `daysRemainingUTC` in `lib/dates.ts` implemented
+(UTC-midnight whole-day diff, shared by item 5's display and item 7's
+future cron). `app/purchases-list.tsx` is an async server component —
+`Purchase.price` (a Prisma `Decimal`) is formatted there and never crosses
+a serialization boundary to a client component. Urgency coloring
+(`text-red-600` ≤2 days, `text-amber-600` ≤7 days) uses the same 7/2-day
+thresholds item 7's reminder cron will use — not decorative. `rawParseJson`
+is never rendered.
+
+Verified two ways: (1) statically — typecheck/lint clean, date-math and
+sort-order checked against the demo seed data and fixed inputs; (2) against
+a real signed-in browser render (Playwright MCP, once connected this
+session) — 26 real synced rows rendered correctly: item name, retailer,
+price, status. Confirmed a real, previously-undocumented finding: all 26
+rows showed `policy unknown`/`RETURNABLE` with no urgency coloring, because
+every row's `returnDeadline` was `null` — not an item 5 bug, it was
+`lib/retailers.ts`'s exact-match policy lookup missing `"Amazon.com"`
+(what Tier 2 actually extracts) against the seed table's `"Amazon"`. **Since
+fixed — see "Retailer-matching fix" below.** Also surfaced, not item 5 bugs
+either: one row (`Camryn Plaza subscription`, OnlyFans) was a subscription
+parsed as a returnable purchase (manually deleted from the DB at the
+user's request — dedup means a future re-sync of that same Gmail message
+would re-add it, since `/api/sync` only skips messages already present in
+`Purchase`, so this isn't a durable fix; a `KEEPING` status once item 6
+exists would be), and one row's item name (`Kitchen item`) looks like a
+Tier 2 fallback rather than a real extraction — both worth a look whenever
+the parsing-rules work is revisited, not blocking item 5.
+
+**Retailer-matching fix — done, tested against the real inbox.**
+`lib/retailers.ts`'s `getRetailerPolicy` was exact-match only (case
+insensitive, but `"Amazon.com"` ≠ `"Amazon"`), so every real row fell
+through to `policy unknown` despite Amazon being in the seed table. Fixed
+with a `normalizeRetailer` helper (lowercase, trim, strip a trailing
+TLD-ish suffix, collapse whitespace) and an in-memory `findMany` + compare
+over the ~8-row policy table instead of a DB-side exact match — strictly
+more permissive, no regression on the demo seed (GolfNow/OnlyFans/the
+seed's own `"Riverside Local Boutique"` unknown-retailer case all still
+correctly return `null`). Existing rows don't self-heal on a re-sync
+(`/api/sync` skips already-synced messages before parsing), so a one-off
+backfill script (not committed, same disposable `tsx` + `dotenv` pattern
+used for the Camryn delete) recomputed `returnDeadline` for every
+null-deadline row using the fixed lookup: **22 of 26 updated, 4 correctly
+stayed unknown** (3 GolfNow + the seed's intentional unknown-retailer
+case). Verified in the real signed-in browser render, all three expected
+buckets present with correct coloring: recent Amazon orders show real
+countdowns (`"3 days left"` amber, `"last day"` red — today is 2026-08-13,
+Amazon's window is 30 days), older Amazon orders correctly show `"return
+window passed"` in gray (not a miss — most of this inbox's Amazon orders
+predate the 30-day window), and GolfNow still shows `policy unknown`.
+`npm run typecheck` and `npm run lint` both pass clean.
+
+Still stubbed, untouched: `lib/email.ts`. `/api/cron/reminders` still
+returns 501. Item 6 (mark as returned/keeping) has no mutation UI yet —
+item 5 is read-only.
 
 ---
 

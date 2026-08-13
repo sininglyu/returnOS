@@ -121,6 +121,11 @@ async function getGmailClient(userId: string): Promise<gmail_v1.Gmail> {
 export interface GmailSearchResult {
   messageIds: string[];
   nextPageToken: string | null;
+  // Gmail's own doc calls this "Estimated total number of results" - not
+  // exact, and can shift between pages of the same search. Surfaced so the
+  // client can show an approximate "X of ~Y" instead of an unbounded count
+  // with no sense of when a sync will finish.
+  resultSizeEstimate: number | null;
 }
 
 export async function searchCandidateEmails(
@@ -148,6 +153,7 @@ export async function searchCandidateEmails(
   return {
     messageIds,
     nextPageToken: data.nextPageToken ?? null,
+    resultSizeEstimate: data.resultSizeEstimate ?? null,
   };
 }
 

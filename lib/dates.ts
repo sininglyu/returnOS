@@ -10,8 +10,20 @@ export function addDaysUTC(date: Date, days: number): Date {
   return result;
 }
 
-// TODO(item 7): used by the daily cron's "N days out" scan (7-day and
-// 2-day reminders per CLAUDE.md V1 scope).
-export function daysRemainingUTC(_deadline: Date, _from: Date): number {
-  throw new Error("not implemented");
+// Whole-day difference between two UTC calendar dates - same UTC-midnight
+// approach as addDaysUTC, so both share one notion of "a day". Positive =
+// days left, 0 = last day, negative = window passed. Used by item 5's
+// purchases list (sort + display label) and item 7's cron "N days out" scan.
+export function daysRemainingUTC(deadline: Date, from: Date): number {
+  const d = Date.UTC(
+    deadline.getUTCFullYear(),
+    deadline.getUTCMonth(),
+    deadline.getUTCDate(),
+  );
+  const f = Date.UTC(
+    from.getUTCFullYear(),
+    from.getUTCMonth(),
+    from.getUTCDate(),
+  );
+  return Math.round((d - f) / 86_400_000);
 }

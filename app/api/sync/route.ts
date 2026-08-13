@@ -132,10 +132,8 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { messageIds, nextPageToken } = await searchCandidateEmails(
-      userId,
-      pageToken ?? null,
-    );
+    const { messageIds, nextPageToken, resultSizeEstimate } =
+      await searchCandidateEmails(userId, pageToken ?? null);
 
     // Skip messages already synced - no fetch, no parse, no Tier 2 call.
     // Makes a re-sync near-free for unchanged mail instead of re-paying
@@ -175,6 +173,9 @@ export async function POST(request: NextRequest) {
       done,
       messagesScanned: updatedRun.messagesScanned,
       purchasesFound: updatedRun.purchasesFound,
+      // Gmail's own estimate, not a running total we compute - it's
+      // approximate and can shift page to page (see lib/gmail.ts).
+      resultSizeEstimate,
     });
   } catch (err) {
     await prisma.syncRun.update({
