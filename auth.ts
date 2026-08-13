@@ -28,6 +28,16 @@ import { prisma } from "@/lib/db";
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(prisma),
   session: { strategy: "database" },
+  callbacks: {
+    // "database" strategy -> this callback's second argument is the real
+    // User row (not a JWT), per @auth/core's own type comments. app/api/sync
+    // needs to know which user to sync; next-auth's DefaultUser type
+    // already declares `id?: string`, so this needs no module augmentation.
+    session({ session, user }) {
+      if (session.user) session.user.id = user.id;
+      return session;
+    },
+  },
   providers: [
     Google({
       clientId: process.env.AUTH_GOOGLE_ID,

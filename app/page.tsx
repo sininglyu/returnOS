@@ -2,6 +2,7 @@
 // (item 5) replaces this once sync + parsing exist.
 
 import { auth, signIn, signOut } from "@/auth";
+import { SyncButton } from "./sync-button";
 
 export default async function Home() {
   const session = await auth();
@@ -23,6 +24,7 @@ export default async function Home() {
               Sign out
             </button>
           </form>
+          <SyncButton />
         </>
       ) : (
         <form
