@@ -30,7 +30,7 @@ deadlines, and emails reminders before they expire.
 | ORM | Prisma |
 | Auth | NextAuth with Google provider (Gmail scopes) |
 | Email ingest | Gmail API (`gmail.readonly`) |
-| Parsing | Tiered: structured-data extraction (schema.org `Order`/`Product` markup) — **done**, kept as a free first check (tested at 0/60 hits on a real inbox — see Current status). LLM fallback (OpenAI `gpt-5-nano`) for emails Tier 1 misses — **next up**, not yet implemented. |
+| Parsing | Tiered: structured-data extraction (schema.org `Order`/`Product` markup) — **done**, kept as a free first check (tested at 0/60 hits on a real inbox — see Current status). LLM fallback (OpenAI `gpt-5-nano` via the Vercel AI SDK — `ai`'s `generateText` + `Output.object`, not the raw `openai` SDK) for emails Tier 1 misses — **done**, tested at 6/60 hits on the same real inbox — see Current status. |
 | Job queue | BullMQ + Redis |
 | Outbound email | Nodemailer (Resend or SMTP in prod) |
 | Hosting | Vercel (app) + Neon or Supabase (Postgres) |
@@ -48,7 +48,7 @@ Gmail API: search for order confirmations
         ↓
 Each candidate email → Tier 1: structured-data extraction (schema.org, local, free)
         ↓ (miss)
-                Tier 2: LLM fallback (OpenAI gpt-5-nano) — next up, not yet built
+                Tier 2: LLM fallback (OpenAI gpt-5-nano, via Vercel AI SDK) — done, 6/60 on a real inbox
         ↓
 Either tier's output → validated with Zod → structured JSON
         ↓
@@ -90,18 +90,20 @@ through the same Zod validation — nothing downstream (Purchase upsert,
 retailer-policy fallback, deadline math) knows or cares which tier produced
 a result.
 
-1. **Tier 1 — structured-data extraction** (`lib/structuredData.ts`, Phase 1,
-   in progress). Parses schema.org `Order`/`Product` markup (JSON-LD or
-   microdata) out of the email's raw HTML. Local, free, no external call. A
-   result is only accepted if every required field is present — a partial
-   match returns `null` (miss), never a partial `Purchase` row.
-2. **Tier 2 — LLM fallback** (next up — provider decided, OpenAI
-   `gpt-5-nano`; not yet implemented). Only runs when Tier 1 misses
-   *and* an API key is configured; otherwise the candidate is logged and
-   skipped, not an error. Gets the email subject, sender, date, and
-   plain-text body only (HTML stripped first, whichever tier — never send
-   raw HTML to a model, it wastes tokens). Structured-output JSON, validated
-   the same way as Tier 1's result.
+1. **Tier 1 — structured-data extraction** (`lib/structuredData.ts`, done).
+   Parses schema.org `Order`/`Product` markup (JSON-LD or microdata) out of
+   the email's raw HTML. Local, free, no external call. A result is only
+   accepted if every required field is present — a partial match returns
+   `null` (miss), never a partial `Purchase` row.
+2. **Tier 2 — LLM fallback** (`lib/openai.ts`, OpenAI `gpt-5-nano` via the
+   Vercel AI SDK — `generateText` + `Output.object({ schema })`, *not*
+   `generateObject`, which is deprecated in the installed `ai` version).
+   Only runs when Tier 1 misses *and* `OPENAI_API_KEY` is configured;
+   otherwise the candidate is logged and skipped, not an error. Gets the
+   email subject, sender, date, and plain-text body only (HTML stripped
+   first, whichever tier — never send raw HTML to a model, it wastes
+   tokens). Structured-output JSON, validated the same way as Tier 1's
+   result. Tested at 6/60 on a real inbox — see Current status.
 - Response must be validated with Zod before it touches the database,
   regardless of tier. A parse that fails validation is logged and skipped,
   never inserted.
@@ -160,12 +162,52 @@ markup. Conclusion: Tier 1 stays in the codebase as a free first check (costs
 nothing per email, doesn't hurt) but isn't sufficient alone — moving to
 Tier 2.
 
-**Tier 2 — next up, not yet implemented.** Provider decided: OpenAI
-`gpt-5-nano`. `lib/claude.ts` remains the unimplemented stub for now and
-will be renamed to `lib/openai.ts` (`parseEmailWithOpenAI`) when this
-lands; `ANTHROPIC_API_KEY` / `@anthropic-ai/sdk` will be replaced with
-`OPENAI_API_KEY` / `openai` in `.env.example` / `package.json` at the same
-time — none of that is changed yet.
+**Tier 2 — done, tested against a real inbox.** `lib/claude.ts` is gone,
+replaced by `lib/openai.ts` (`parseEmailWithOpenAI`) — OpenAI `gpt-5-nano`
+called through the Vercel AI SDK. `lib/parse.ts` falls through to Tier 2 on
+a Tier 1 miss, sharing one retailer-policy-fallback helper between both
+tiers so they can't drift on that logic; a Tier 2 call is skipped (not an
+error) when `OPENAI_API_KEY` is unset. `@anthropic-ai/sdk` removed from
+`package.json`; `ai` + `@ai-sdk/openai` added (dependency add flagged and
+confirmed before installing, per Tier 1 rule 5). `ANTHROPIC_API_KEY` →
+`OPENAI_API_KEY` in `.env.example`.
+
+Two things worth recording precisely, since both were found the hard way,
+not anticipated in the original plan:
+
+- **`generateObject` is deprecated** in the installed `ai@^7.0.64` (checked
+  directly against `node_modules/ai/dist/index.d.ts`, not assumed). Current
+  pattern: `generateText` with `output: Output.object({ schema })`; the
+  result lands on `result.output`, not `result.object`.
+- **OpenAI's structured-output mode rejects a root-level `oneOf`.** The
+  first live run (all 60 candidates) failed 60/60 with a real 400
+  (`"'oneOf' is not permitted"`) — `parseResultSchema` is a Zod
+  `discriminatedUnion`, which compiles to a root `oneOf`. Fix:
+  `lib/openai.ts` asks the model for a separate flat, all-nullable
+  `tier2OutputSchema` instead, then maps that into `parseResultSchema`'s
+  shape before `lib/parse.ts`'s existing (shared-with-Tier-1) Zod
+  validation runs. `parseResultSchema` itself is unchanged — this is purely
+  what shape the model is asked to fill in.
+
+**Real result, 60 real Gmail-search candidates (same 3-page sample Tier 1
+was tested against), `reasoningEffort: "low"`:** 6 hits, 33 correctly
+classified as non-purchases, 21 that the model flagged as purchase-like but
+whose extraction didn't clear `parseResultSchema` (most likely an
+unparseable `orderDate`) — caught by validation and skipped, never a
+partial `Purchase` row. All 6 hits sanity-checked by eye: real retailers
+(5× Amazon.com, 1× GolfNow) and real item names (a book, medical supplies,
+a knife set, a golf tee-time reservation, avocado oil, a cable). Combined
+with Tier 1's 0/60, the two tiers together turn this inbox's 0% into a 10%
+hit rate on the sample — real signal, not saturated, but no longer zero.
+`npm run typecheck` and `npm run lint` both pass clean.
+
+Note this doesn't check off the V1 "Parsing endpoint with Zod validation"
+item below — that's `lib/parse.ts` wired into `/api/sync`, which still
+returns 501 and is untouched by this work. Both parsing tiers and their
+shared Zod validation are done and tested directly (not through an
+endpoint); wiring `/api/sync` up to call them is the next item, tracked
+together with the "Manual Sync now button" item since they're the same
+piece of work.
 
 Still stubbed, untouched: `lib/email.ts`, `daysRemainingUTC` in
 `lib/dates.ts`. `/api/sync` and `/api/cron/reminders` still return 501.

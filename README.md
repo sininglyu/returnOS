@@ -7,13 +7,14 @@ architecture, data model, and V1 scope.
 ## Stack
 
 Next.js (App Router) + TypeScript, Tailwind CSS, PostgreSQL via Prisma,
-NextAuth (Google, Gmail readonly scope), Claude API for parsing, Nodemailer
+NextAuth (Google, Gmail readonly scope), tiered parsing (schema.org
+extraction, then OpenAI `gpt-5-nano` via the Vercel AI SDK), Nodemailer
 for reminder email.
 
 ## Setup
 
 1. Copy `.env.example` to `.env.local` and fill in real values (Postgres URLs,
-   Google OAuth client, `ANTHROPIC_API_KEY`, outbound email transport,
+   Google OAuth client, `OPENAI_API_KEY`, outbound email transport,
    `CRON_SECRET`). Never commit `.env.local`.
 2. Install dependencies:
    ```bash
