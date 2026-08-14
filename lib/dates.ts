@@ -27,3 +27,10 @@ export function daysRemainingUTC(deadline: Date, from: Date): number {
   );
   return Math.round((d - f) / 86_400_000);
 }
+
+// UTC-midnight of the given date's calendar day - the boundary item 7's
+// cron scan needs, expressed with the same UTC-midnight approach as
+// addDaysUTC/daysRemainingUTC rather than inline date math in lib/reminders.ts.
+export function startOfUTCDay(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}

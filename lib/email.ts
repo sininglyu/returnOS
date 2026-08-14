@@ -9,14 +9,54 @@
 // external input — messages are always constructed from our own structured
 // Purchase/Reminder data, never from raw email content.
 
-// TODO(item 7): send the 7-day / 2-day deadline reminder email via
-// Resend or SMTP (see .env.example for the transport config names).
+import nodemailer, { type Transporter } from "nodemailer";
 
-export async function sendReminderEmail(_input: {
+// Lazily created and memoized so the module doesn't throw at import time
+// when SMTP env is unset, but is reused across sends within one
+// invocation (lib/reminders.ts sends sequentially in a loop).
+let transport: Transporter | undefined;
+
+function getTransport(): Transporter {
+  if (transport) return transport;
+
+  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD } = process.env;
+  if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASSWORD) {
+    // Caller (lib/reminders.ts) treats a thrown send as "skip this
+    // purchase, don't record a Reminder" - fails safe on a misconfigured
+    // prod env instead of silently burning the send-once guard.
+    throw new Error("SMTP transport not configured (missing env)");
+  }
+
+  const port = Number(SMTP_PORT); // env vars are always strings
+  transport = nodemailer.createTransport({
+    host: SMTP_HOST,
+    port,
+    secure: port === 465,
+    auth: { user: SMTP_USER, pass: SMTP_PASSWORD },
+  });
+  return transport;
+}
+
+export async function sendReminderEmail(input: {
   to: string;
   itemName: string;
   retailer: string;
   daysRemaining: number;
 }): Promise<void> {
-  throw new Error("not implemented");
+  const { to, itemName, retailer, daysRemaining } = input;
+  const subject = `Return window closing: ${itemName} (${daysRemaining} days left)`;
+  const text =
+    `Your ${retailer} order "${itemName}" has ${daysRemaining} day(s) left ` +
+    `in its return window.`;
+  const html =
+    `<p>Your ${retailer} order <strong>${itemName}</strong> has ` +
+    `<strong>${daysRemaining} day(s)</strong> left in its return window.</p>`;
+
+  await getTransport().sendMail({
+    from: process.env.EMAIL_FROM,
+    to,
+    subject,
+    text,
+    html,
+  });
 }

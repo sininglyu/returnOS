@@ -126,7 +126,7 @@ a result.
       first, LLM fallback — see "Parsing rules")
 - [x] Purchases list UI sorted by days remaining
 - [x] Mark as returned / keeping
-- [ ] Daily cron + reminder email at 7 days and 2 days out
+- [x] Daily cron + reminder email at 7 days and 2 days out
 - [x] Retailer policy table seeded with ~8 major retailers (`prisma/seed.ts`)
 
 **Explicitly out of scope for V1:** drop-off location maps, route optimization,
@@ -329,8 +329,57 @@ comment. `npm run typecheck` and `npm run lint` both pass clean (the new
 `RouteContext<"/api/purchases/[id]">` type resolved on the first
 `typecheck` run — no stale-generated-types issue in practice).
 
-Still stubbed, untouched: `lib/email.ts`. `/api/cron/reminders` still
-returns 501.
+**Item 7 (daily cron + reminder email) — done, verified end-to-end against
+a disposable test SMTP relay (nodemailer Ethereal — nothing real ever
+delivered).** `lib/dates.ts` gained `startOfUTCDay` (UTC-midnight
+boundary, reusing the existing `addDaysUTC`/`daysRemainingUTC` convention
+rather than inline date math). `lib/email.ts`'s `sendReminderEmail` is
+implemented — lazy memoized nodemailer SMTP transport, throws a clear
+error on missing config so a misconfigured prod env fails safe instead of
+silently burning the send-once guard. `lib/reminders.ts` (new) —
+`processDueReminders(now)` scans `RETURNABLE` purchases with
+`returnDeadline` inside `[startOfUTCDay(now), startOfUTCDay(now) + 8
+days)` (an explicit UTC-day-boundary query, not "end of day" fuzziness),
+fires the 7-day/2-day thresholds via the shared `Reminder`
+`@@unique([purchaseId, daysBefore])` guard, and — the key robustness rule
+— sends **one** email per purchase for the most-urgent unsent threshold
+but **records all** due thresholds at once, so a purchase that skipped
+straight past its 7-day mark (e.g. a missed cron day) doesn't also get a
+stale 7-day email after its 2-day one already went out. Send-then-record
+ordering means a send failure never writes a `Reminder` row (retried next
+run); `/api/cron/reminders` keeps its already-correct `Bearer
+${CRON_SECRET}` → 401 check verbatim and now calls through to
+`processDueReminders`. `vercel.json` (new) declares the daily 14:00 UTC
+cron trigger — didn't exist before this.
+
+**Explicit design decision, not an oversight:** a purchase whose
+`returnDeadline` has already fully passed gets no catch-up reminder, even
+if a threshold was never sent — matches item 5's UI, which already treats
+a passed deadline as "return window passed," nothing actionable left.
+Confirmed live: a synthetic `RETURNABLE` purchase with a 3-days-ago
+deadline and zero `Reminder` rows was correctly excluded from `scanned`
+(deleted after the check, never real data).
+
+Real run against the live app (not just seed data): `scanned: 3` — the
+two demo seed fixtures (`seed-amazon-2d`, `seed-nike-7d`) *and* one real
+synced purchase ("Kitchen item," 2 days out) that happened to be in
+range, confirming the cron correctly scans across all users, not just
+one. `sent: 3`, and the `Reminder` rows landed exactly as designed: the
+2-days-out purchases got both `daysBefore: 7` and `daysBefore: 2` rows
+(both thresholds already passed at d=2), the 7-days-out one got only
+`daysBefore: 7`. Second call: idempotent (`sent: 0`, `skippedAlreadySent:
+3`, row count unchanged). Auth: no header / wrong secret both real `401`.
+Fail-safe: blanked `SMTP_HOST` mid-test → `failed: 3`, zero `Reminder`
+rows written for the failed sends (proving send-then-record); restoring
+`SMTP_HOST` and re-running immediately succeeded again (`sent: 3`),
+confirming the earlier failure didn't burn the send-once guard. All test
+`Reminder` rows and the synthetic boundary-check purchase were deleted
+afterward — the real "Kitchen item" purchase and the demo seed fixtures
+are back to zero `Reminder` rows, so they'll get a genuine reminder once
+real SMTP is configured, not silently skipped because of this test run.
+`npm run typecheck` and `npm run lint` both pass clean.
+
+V1 scope is now fully checked off.
 
 ---
 
