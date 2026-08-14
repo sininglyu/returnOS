@@ -71,7 +71,12 @@ retailer name and an item name, respond with isPurchase: false.
 If it is a purchase confirmation, extract:
 - retailer: the store/brand name
 - itemName: the purchased item (first/primary item if there are several)
-- orderDate: the date the order was placed, as an ISO date string
+- orderDate: the date the order was placed, as an ISO date string (e.g.
+  "2026-08-01"). If the body doesn't explicitly restate the order date,
+  use the email's own "Date:" field above as your best estimate — for an
+  order-confirmation email, the send date is a reasonable proxy for the
+  order date. Only return null here if you can't find a date anywhere,
+  including that Date field.
 - price: the item or order total, as a number, or null if not stated
 - currency: the ISO currency code (e.g. "USD"), or null if not stated
 - orderNumber: the order/confirmation number, or null if not stated

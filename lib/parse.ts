@@ -76,6 +76,16 @@ async function tryTier2(message: GmailMessage): Promise<ParseResult | null> {
     console.log("parse: tier2 output failed validation", {
       messageId: message.id,
       outcome: "tier2-invalid",
+      // Field names only, never values - structural metadata, not content
+      // (CLAUDE.md rule 3). A retailer/itemName failure is unambiguous,
+      // but an "orderDate" path failure has two sub-modes needing opposite
+      // fixes: the model returned null (mapToParseResult coerced it to ""
+      // - a prompt/reasoning problem) vs. a real, non-empty string
+      // Date.parse still can't handle (a format problem). raw already
+      // holds the post-mapping value here, before validation ran, so
+      // checking emptiness (never the value itself) disambiguates them.
+      failedFields: validated.error.issues.map((i) => i.path.join(".")),
+      orderDateWasEmpty: raw.isPurchase ? raw.orderDate === "" : undefined,
     });
     return null;
   }
@@ -109,6 +119,7 @@ export async function parseCandidateEmail(
     console.log("parse: structured data failed validation", {
       messageId: message.id,
       outcome: "tier1-invalid",
+      failedFields: validated.error.issues.map((i) => i.path.join(".")),
     });
     return tryTier2(message);
   }

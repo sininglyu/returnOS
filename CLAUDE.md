@@ -1,4 +1,4 @@
-# Returns OS
+# Return OS
 
 Web app that finds returnable purchases in a user's Gmail, tracks return
 deadlines, and emails reminders before they expire.
@@ -203,6 +203,65 @@ hit rate on the sample — real signal, not saturated, but no longer zero.
 
 At the time that paragraph was written, `lib/parse.ts` wasn't wired into
 `/api/sync` yet. It is now — see item 2 below, done in the same session.
+
+**The "most likely an unparseable `orderDate`" guess above was wrong in a
+specific, useful way — confirmed, not re-guessed, in a later session.**
+Added permanent diagnostic logging to both tiers' Zod-validation-failure
+branches in `lib/parse.ts` (field *names* only, e.g. `failedFields:
+["orderDate"]` — never values, consistent with rule 3), plus a boolean
+`orderDateWasEmpty` that disambiguates the two ways an `orderDate` path
+failure can happen (model returned `null`, vs. model returned a real
+string `Date.parse` couldn't handle) — achievable without touching
+`lib/openai.ts` at all, since `lib/parse.ts`'s `tryTier2` already holds
+the post-mapping value before validation runs. Real diagnostic run, 60
+real not-yet-synced candidates: **100% of the 23 validation failures were
+`orderDate`, and 100% of those were the empty case — zero were a garbage
+string Date.parse choked on.** Root cause: `lib/openai.ts`'s prompt
+already passes the email's own `Date:` header into the model's context,
+but never told the model it could use that as a fallback when the body
+doesn't explicitly restate an order date — so the model conservatively
+returned `null` rather than inferring from information already sitting in
+its own input. Fix: one addition to `SYSTEM_PROMPT`'s `orderDate` field
+guidance, explicitly permitting the email `Date:` field as a fallback
+(plus an incidental ISO-format example, since the line was already being
+touched — `"e.g. \"2026-08-01\""`). Nothing else changed; `retailer`,
+`itemName`, and `price` had zero validation failures in the diagnostic,
+so nothing about their handling needed touching.
+
+Re-ran the same diagnostic (same 60-candidate cap, same dedup, so mostly
+the same previously-failing pool) after the fix: **`failedValidation: 0`
+— eliminated entirely.** Hits went 4→21 on that pass; `notPurchase` went
+33→39 (grew, not collapsed) — the fix is orthogonal to the `isPurchase`
+classification decision, so this rules out the fix trading correctness
+for recall (a real risk with prompt loosening, checked directly rather
+than assumed away). Confirmed end-to-end, not just in the diagnostic
+script: a real "Sync now" through the actual browser/`/api/sync` path
+(stopped early after 60 scanned) produced **19 new real `Purchase` rows**
+in one run — for comparison, the *entire* previous real sync (a full
+prior session, 156 messages) only found 26. Spot-checked by eye: all 19
+are real, plausible Amazon purchases (a 13-piece knife set, a garbage
+disposal, golf gloves, a USB-C cable, a magnetic phone tripod, a splatter
+screen, avocado oil ×2) with correct retailer/item/price/date — no
+hallucinated purchases, no garbage dates. Two pre-existing, already-known
+issues resurfaced (not caused by this fix, not addressed by it): two rows
+still landed with a generic fallback item name (`"Kitchen item"`, `"Book
+item"`), and a few duplicate-content pairs exist as separate rows because
+they're genuinely separate emails (e.g. an order confirmation and a
+shipping confirmation for the same real purchase) with distinct
+`gmailMessageId`s — the app's uniqueness guarantee is per-message, not
+per-real-world-order, and nothing in this pass changed that.
+`npm run typecheck` and `npm run lint` both pass clean.
+
+Not touched in this pass (explicit non-goals, not oversights):
+`lib/gmail.ts`'s `SEARCH_QUERY` (upstream recall — a separate lever from
+this pass's precision fix), Tier 1 (already conclusively 0% schema.org
+markup on this inbox, no code change there would matter), and
+`lib/schemas.ts`'s `returnDeadline` field, which — unlike `orderDate` —
+has no `.refine()` date-parseability check at all
+(`returnDeadline: z.string().nullable()`); a garbage value there would
+currently pass Zod validation and fail later at `new Date(...)` in the
+upsert instead, invisible to this pass's Zod-issue-based diagnostic
+either way. Worth a real follow-up, not conflated with this fix.
 
 **Item 2 (`/api/sync` + "Sync now" button) — done, tested against the real
 connected inbox end-to-end**, not just typechecked. `auth.ts` got a
