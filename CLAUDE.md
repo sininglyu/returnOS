@@ -30,7 +30,7 @@ deadlines, and emails reminders before they expire.
 | ORM | Prisma |
 | Auth | NextAuth with Google provider (Gmail scopes) |
 | Email ingest | Gmail API (`gmail.readonly`) |
-| Parsing | Tiered: structured-data extraction (schema.org `Order`/`Product` markup) — **done**, kept as a free first check (0/60 on a real inbox — this inbox's order emails carry no schema.org markup at all, confirmed not an extractor bug). LLM fallback (OpenAI `gpt-5-nano` via the Vercel AI SDK — `ai`'s `generateText` + `Output.object`, not `generateObject`, which is deprecated in the installed `ai` version) for emails Tier 1 misses — **done**, ~35% (21/60) hit rate on a real inbox — see Current status / `git log` for tuning history. |
+| Parsing | Tiered: structured-data extraction (schema.org `Order`/`Product` markup) — **done**, kept as a free first check (0/60 on a real inbox — this inbox's order emails carry no schema.org markup at all, confirmed not an extractor bug). LLM fallback (OpenAI `gpt-5-nano` via the Vercel AI SDK — `ai`'s `generateText` + `Output.object`, not `generateObject`, which is deprecated in the installed `ai` version) for emails Tier 1 misses — **done**, ~35% (21/60) hit rate on a real inbox — see `git log` for tuning history. |
 | Job queue | BullMQ + Redis |
 | Outbound email | Nodemailer (Resend or SMTP in prod) |
 | Hosting | Vercel (app) + Neon or Supabase (Postgres) |
@@ -103,7 +103,7 @@ a result.
    email subject, sender, date, and plain-text body only (HTML stripped
    first, whichever tier — never send raw HTML to a model, it wastes
    tokens). Structured-output JSON, validated the same way as Tier 1's
-   result. ~35% (21/60) hit rate on a real inbox — see Current status.
+   result — see Stack table for current hit rate.
 - Response must be validated with Zod before it touches the database,
   regardless of tier. A parse that fails validation is logged and skipped,
   never inserted. Both tiers' validation-failure log lines include which
@@ -137,14 +137,16 @@ return label generation, refund tracking, mobile app, multi-account support.
 
 ## Current status
 
-**V1 scope is fully checked off**, verified against a real connected Gmail
-account throughout (not just seed data). Detailed narrative — exact test
-numbers, bugs found, before/after evidence for every item above — moved
-out of this always-loaded file; `git log` carries an equally thorough
-commit message for each one (auth, sync, both parsing tiers, purchases
-list, retailer-matching fix, mark-returned/keeping, reminders cron,
-parsing hit-rate fix). This section stays a compact current-state
-reference — what's built, in one place, not a diary of how it got there.
+**V1 shipped**, verified against a real connected Gmail account throughout
+(not just seed data). Now in post-V1 stabilization: real-inbox testing
+keeps surfacing gaps past the V1 line, tracked below as they're found and
+fixed. This section is a compact current-state reference — what's true
+right now, in one place. Investigation narrative, exact test numbers, and
+before/after evidence live in `git log`'s commit messages instead, one per
+item below (auth, sync, both parsing tiers, purchases list,
+retailer-matching fix, mark-returned/keeping, reminders cron, parsing
+hit-rate fix, Gmail search recall fix) — check there for how a fact below
+was established, not here.
 
 - **Auth & Gmail** (`auth.ts`, `lib/gmail.ts`) — Google sign-in,
   `gmail.readonly`. OAuth consent screen is intentionally in Google's
@@ -153,28 +155,40 @@ reference — what's built, in one place, not a diary of how it got there.
 - **Parsing** (`lib/structuredData.ts`, `lib/openai.ts`, `lib/parse.ts`,
   `lib/schemas.ts`) — Tier 1 (schema.org extraction) stays as a free first
   check but never hits on this inbox (0% real markup, confirmed not an
-  extractor bug). Tier 2 (OpenAI `gpt-5-nano`) is the real path, ~35%
-  (21/60) hit rate on a real inbox after a prompt fix (the model wasn't
-  using the email's own `Date:` header as an `orderDate` fallback). Both
-  tiers share one Zod validation gate (`parseResultSchema`) and one
-  retailer-policy fallback; a validation failure logs which field(s)
-  failed (never values) and is skipped, never a partial row. Known SDK
-  gotchas: `generateObject` is deprecated in the installed `ai` version —
-  use `generateText` + `Output.object`; OpenAI's structured-output mode
-  rejects a root-level Zod `discriminatedUnion` (`oneOf`), so Tier 2 asks
-  for a flat all-nullable shape and maps it into `parseResultSchema`
-  itself. Known gap, not yet fixed: `returnDeadline` (unlike `orderDate`)
-  has no parseable-date check, so a garbage value would fail later at the
-  DB layer instead of at validation.
+  extractor bug). Tier 2 (OpenAI `gpt-5-nano`) is the real path — see
+  Stack table for current hit rate. Both tiers share one Zod validation
+  gate (`parseResultSchema`) and one retailer-policy fallback; a
+  validation failure logs which field(s) failed (never values) and is
+  skipped, never a partial row. Known SDK gotchas: `generateObject` is
+  deprecated in the installed `ai` version — use `generateText` +
+  `Output.object`; OpenAI's structured-output mode rejects a root-level
+  Zod `discriminatedUnion` (`oneOf`), so Tier 2 asks for a flat
+  all-nullable shape and maps it into `parseResultSchema` itself. Tier
+  2's classification isn't fully deterministic run-to-run at
+  `reasoningEffort: "low"` — the same email can pass or fail across
+  separate calls, so a single failed run isn't conclusive on its own.
+  Known gap, not yet fixed: `returnDeadline` (unlike `orderDate`) has no
+  parseable-date check, so a garbage value would fail later at the DB
+  layer instead of at validation.
+- **Gmail search** (`lib/gmail.ts` `SEARCH_QUERY`) — subject alternation
+  includes `ordered` as its own token, not just `order`: Gmail's
+  `subject:` operator doesn't stem, and Amazon's real order-confirmation
+  subject is `"Ordered: ..."`, so without this token that email was never
+  even a search candidate (a recall gap upstream of parsing, not a
+  parsing miss).
 - **Sync** (`app/api/sync/route.ts`, `app/sync-button.tsx`) — chunked
   (one Gmail page/call), bounded concurrency (5x via `Promise.all`),
   dedups on `gmailMessageId` before ever calling Tier 1/2, and never lets
   a re-sync's `update` touch `status` (can't silently undo
-  RETURNED/KEEPING).
+  RETURNED/KEEPING). Known gap: no resume checkpoint across sync sessions
+  — every run restarts from page 1, so orders can go unreached
+  indefinitely as the candidate pool grows.
 - **Purchases list** (`app/purchases-list.tsx`, `lib/purchases.ts`) —
-  sorted `status asc, returnDeadline asc nulls last`; urgency coloring at
-  the same 7/2-day thresholds the reminder cron uses; `rawParseJson` never
-  rendered.
+  grouped into urgency sections (Act now / This week / Plenty of time /
+  Window passed / Policy unknown / Resolved) at the same 7/2-day
+  thresholds the reminder cron uses; base sort is `status asc,
+  returnDeadline asc nulls last`; `rawParseJson` never rendered. Branded
+  "Return OS" throughout (`app/page.tsx`, `app/layout.tsx`).
 - **Retailer-policy matching** (`lib/retailers.ts`) — normalized
   (lowercased, TLD-stripped) lookup, not exact-match, so `"Amazon.com"`
   resolves against the seeded `"Amazon"`; ~8 retailers seeded
@@ -194,56 +208,15 @@ reference — what's built, in one place, not a diary of how it got there.
   once-guard. No catch-up reminder once a deadline has fully passed — by
   design, matches the list UI's own "return window passed" treatment.
 
-**Gmail search recall fix — done, tested against the user's real Amazon
-order history, not just candidate counts.** Compared ~38 real Amazon
-orders (scraped from amazon.com/your-orders) against what had actually
-synced — 13 were completely missing. Traced 10 of them back through
-Gmail directly (searched by order number, independent of the app's own
-query) and found the dominant cause: `lib/gmail.ts`'s `SEARCH_QUERY` used
-`subject:(order OR receipt OR shipped OR delivered OR confirmation)`.
-Gmail's `subject:` operator does not stem — `order` never matches
-`ordered`, and Amazon's actual order-confirmation email subject is
-`"Ordered: ..."`. Confirmed directly against the real Gmail API: every
-`"Ordered: ..."` email for every order checked returned `false` against
-the old query, while that same order's `"Shipped: ..."`/`"Delivered:
-..."` emails matched — meaning the parser was only ever seeing the two
-least-detailed emails per order, never the one with the real item/price.
-Fix: added `ordered` as its own token to the subject alternation.
-
-Verified two ways, not assumed: (1) re-ran the exact 10 previously-`false`
-messages against the fixed query — 10/10 now match, and 7/10 parse as
-real hits standalone (3 — BetterBody Foods, VEVOR, Sofucor — still failed
-Tier 2 classification even from their Ordered email, a separate,
-unfixed issue). (2) Real end-to-end: one real "Sync now" through the
-actual browser/`/api/sync` path found **39 new purchases in 120 scanned
-messages** (vs. 12 found in 80 scanned before the fix, roughly a
-2x jump in hit rate) and confirmed 7 of the 10 specifically-tracked
-missed orders landed as real `Purchase` rows, including the largest
-single miss, a $158.37 ceiling fan. Noted, not a regression: Tier 2's
-classification isn't perfectly deterministic run-to-run at
-`reasoningEffort: "low"` — Sofucor and BetterBody Foods failed in the
-standalone check but succeeded in the real sync moments later, same
-email, same query.
-
-**Three other confirmed-but-separate root causes from the same
-investigation, not fixed here:**
-- Multi-item bundled shipment emails (`"X and 2 more items"`) collapse
-  into one row for a single item, sometimes the wrong one at the wrong
-  price — confirmed directly: one real email covering 3 separate orders
-  produced a row for a 4th, unrelated item at a price matching none of
-  them. `lib/openai.ts`'s prompt is working as instructed ("extract the
-  first/primary item if there are several") — this is a prompt/schema
-  design question, not a bug in the current code.
-- No resume checkpoint across sync sessions (already known) — confirmed
-  today to cause real, not just theoretical, misses: two real orders
-  parse correctly right now but have never been reached by any sync,
-  since every run restarts from page 1 and the candidate pool keeps
-  growing as new mail arrives.
-- Item-name extraction still sometimes falls back to a generic
-  placeholder (`"Kitchen item"`, `"Home item"`, `"Pantry item"`) instead
-  of the real product name — same known issue, unaffected by this fix.
-
-**Still known, unaffected by this fix:**
+**Known, confirmed-real gaps, not yet fixed:**
+- Multi-item bundled shipment emails (`"X and 2 more items"`) sometimes
+  collapse into a row for the wrong item at the wrong price —
+  `lib/openai.ts`'s prompt is working as instructed ("extract the
+  first/primary item if there are several"); this is a prompt/schema
+  design question, not a code bug.
+- Item-name extraction sometimes falls back to a generic placeholder
+  (`"Kitchen item"`, `"Home item"`, `"Pantry item"`) instead of the real
+  product name.
 - Zero automated test coverage — everything verified via live/manual
   testing (Playwright, real Gmail account, disposable diagnostic scripts).
 - Never deployed to production — the Vercel Cron trigger, real SMTP, and
