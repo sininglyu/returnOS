@@ -32,8 +32,20 @@ export const SYNC_PAGE_SIZE = 20;
 // away from the whole mailbox. 180 days covers every seeded RetailerPolicy
 // window (max 90 days) with headroom to still surface recently-expired
 // purchases in the UI.
+//
+// "ordered" is deliberately its own token, not covered by "order" -
+// Gmail's subject: operator does not stem, so a subject like "Ordered: 1
+// Health Care item" (Amazon's actual order-confirmation subject line)
+// does not match subject:order. Confirmed against the real Gmail API,
+// not assumed: every "Ordered: ..." email for a real order returned
+// false against the query without this token, while that same order's
+// "Shipped: ..."/"Delivered: ..." emails matched. The Ordered email is
+// the one with the real item name/price/order details - shipping and
+// delivery notifications are frequently too content-light for Tier 2 to
+// extract anything from, so losing the Ordered email cost real hits, not
+// just redundant candidates.
 const SEARCH_QUERY =
-  '(subject:(order OR receipt OR shipped OR delivered OR confirmation) OR "order number") newer_than:180d -category:promotions -category:social -category:forums';
+  '(subject:(order OR ordered OR receipt OR shipped OR delivered OR confirmation) OR "order number") newer_than:180d -category:promotions -category:social -category:forums';
 
 function isInvalidGrantError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;

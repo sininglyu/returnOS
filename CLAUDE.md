@@ -194,21 +194,61 @@ reference — what's built, in one place, not a diary of how it got there.
   once-guard. No catch-up reminder once a deadline has fully passed — by
   design, matches the list UI's own "return window passed" treatment.
 
-**Known gaps, carried forward, not yet addressed:**
-- Item-name extraction sometimes falls back to a generic placeholder
-  (`"Kitchen item"`, `"Book item"`) instead of the real product name.
-- Duplicate rows can occur for one real-world order when both an order
-  confirmation and a shipping confirmation match the Gmail search query —
-  dedup is per-`gmailMessageId`, not per-real-world-order.
+**Gmail search recall fix — done, tested against the user's real Amazon
+order history, not just candidate counts.** Compared ~38 real Amazon
+orders (scraped from amazon.com/your-orders) against what had actually
+synced — 13 were completely missing. Traced 10 of them back through
+Gmail directly (searched by order number, independent of the app's own
+query) and found the dominant cause: `lib/gmail.ts`'s `SEARCH_QUERY` used
+`subject:(order OR receipt OR shipped OR delivered OR confirmation)`.
+Gmail's `subject:` operator does not stem — `order` never matches
+`ordered`, and Amazon's actual order-confirmation email subject is
+`"Ordered: ..."`. Confirmed directly against the real Gmail API: every
+`"Ordered: ..."` email for every order checked returned `false` against
+the old query, while that same order's `"Shipped: ..."`/`"Delivered:
+..."` emails matched — meaning the parser was only ever seeing the two
+least-detailed emails per order, never the one with the real item/price.
+Fix: added `ordered` as its own token to the subject alternation.
+
+Verified two ways, not assumed: (1) re-ran the exact 10 previously-`false`
+messages against the fixed query — 10/10 now match, and 7/10 parse as
+real hits standalone (3 — BetterBody Foods, VEVOR, Sofucor — still failed
+Tier 2 classification even from their Ordered email, a separate,
+unfixed issue). (2) Real end-to-end: one real "Sync now" through the
+actual browser/`/api/sync` path found **39 new purchases in 120 scanned
+messages** (vs. 12 found in 80 scanned before the fix, roughly a
+2x jump in hit rate) and confirmed 7 of the 10 specifically-tracked
+missed orders landed as real `Purchase` rows, including the largest
+single miss, a $158.37 ceiling fan. Noted, not a regression: Tier 2's
+classification isn't perfectly deterministic run-to-run at
+`reasoningEffort: "low"` — Sofucor and BetterBody Foods failed in the
+standalone check but succeeded in the real sync moments later, same
+email, same query.
+
+**Three other confirmed-but-separate root causes from the same
+investigation, not fixed here:**
+- Multi-item bundled shipment emails (`"X and 2 more items"`) collapse
+  into one row for a single item, sometimes the wrong one at the wrong
+  price — confirmed directly: one real email covering 3 separate orders
+  produced a row for a 4th, unrelated item at a price matching none of
+  them. `lib/openai.ts`'s prompt is working as instructed ("extract the
+  first/primary item if there are several") — this is a prompt/schema
+  design question, not a bug in the current code.
+- No resume checkpoint across sync sessions (already known) — confirmed
+  today to cause real, not just theoretical, misses: two real orders
+  parse correctly right now but have never been reached by any sync,
+  since every run restarts from page 1 and the candidate pool keeps
+  growing as new mail arrives.
+- Item-name extraction still sometimes falls back to a generic
+  placeholder (`"Kitchen item"`, `"Home item"`, `"Pantry item"`) instead
+  of the real product name — same known issue, unaffected by this fix.
+
+**Still known, unaffected by this fix:**
 - Zero automated test coverage — everything verified via live/manual
-  testing (Playwright, real Gmail account, disposable diagnostic scripts)
-  rather than a test suite.
+  testing (Playwright, real Gmail account, disposable diagnostic scripts).
 - Never deployed to production — the Vercel Cron trigger, real SMTP, and
   the OAuth "Testing"-mode limitation are all unverified outside
   `localhost`.
-- `lib/gmail.ts`'s `SEARCH_QUERY` (upstream recall — which candidates ever
-  reach the parser) hasn't been revisited; the parsing-hit-rate work only
-  improved precision on candidates already found.
 
 ---
 
