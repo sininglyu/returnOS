@@ -1,4 +1,4 @@
-# Returns OS
+# Return OS
 
 Web app that finds returnable purchases in a user's Gmail, tracks return
 deadlines, and emails reminders before they expire. See `CLAUDE.md` for full

@@ -58,12 +58,12 @@ export function PurchaseActions({
 
   return (
     <div className="flex flex-col items-end gap-1">
-      <div className="flex gap-2">
+      <div className="flex gap-1.5">
         <button
           type="button"
           onClick={() => markAs("RETURNED")}
           disabled={saving}
-          className="text-xs underline"
+          className="rounded-md bg-accent px-2.5 py-1 text-xs font-semibold text-white hover:bg-accent-2 disabled:cursor-not-allowed disabled:opacity-60"
         >
           Mark returned
         </button>
@@ -71,14 +71,12 @@ export function PurchaseActions({
           type="button"
           onClick={() => markAs("KEEPING")}
           disabled={saving}
-          className="text-xs underline"
+          className="rounded-md border border-border-strong bg-surface px-2.5 py-1 text-xs font-semibold text-foreground hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
         >
           Keeping it
         </button>
       </div>
-      {state === "error" && (
-        <p className="text-xs text-red-600">Failed - try again.</p>
-      )}
+      {state === "error" && <p className="text-xs text-crit">Failed — try again.</p>}
     </div>
   );
 }

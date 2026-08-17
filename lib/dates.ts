@@ -34,3 +34,15 @@ export function daysRemainingUTC(deadline: Date, from: Date): number {
 export function startOfUTCDay(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
+
+// Human-readable "Mon D" label, read in UTC rather than the host's local
+// timezone - matches addDaysUTC/daysRemainingUTC's UTC-midnight convention
+// instead of quietly introducing a second notion of "the date" for display.
+// Used by app/purchases-list.tsx (order date, resolved date).
+export function formatDateUTC(date: Date): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(date);
+}

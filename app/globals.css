@@ -1,26 +1,79 @@
 @import "tailwindcss";
 
+/* Return OS design tokens. Cool porcelain/ink neutrals with a petrol-blue
+   accent (not a default Tailwind hue) and three semantic tones - crit/warn
+   for the 2-day/7-day reminder thresholds (see lib/dates.ts), safe for a
+   completed return - kept distinct from the accent so "brand" and "status"
+   never collide. Dark values are hand-picked, not an automatic invert. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #eef1f4;
+  --foreground: #151b22;
+  --surface: #ffffff;
+  --surface-2: #f7f9fb;
+  --border: #e1e6eb;
+  --border-strong: #cad2da;
+  --ink-2: #57626f;
+  --ink-3: #8a94a1;
+  --accent: #17566f;
+  --accent-2: #1e6e8e;
+  --crit: #b23a2e;
+  --crit-bg: #f9eae7;
+  --crit-line: #d6685a;
+  --warn: #8a5d0e;
+  --warn-bg: #f8f0de;
+  --warn-line: #c79a45;
+  --safe: #2c7048;
+  --safe-bg: #e7f1eb;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+  --color-crit: var(--crit);
+  --color-crit-bg: var(--crit-bg);
+  --color-crit-line: var(--crit-line);
+  --color-warn: var(--warn);
+  --color-warn-bg: var(--warn-bg);
+  --color-warn-line: var(--warn-line);
+  --color-safe: var(--safe);
+  --color-safe-bg: var(--safe-bg);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #0f131a;
+    --foreground: #e7ecf2;
+    --surface: #161c24;
+    --surface-2: #1b222c;
+    --border: #262f3a;
+    --border-strong: #37424f;
+    --ink-2: #9ba6b3;
+    --ink-3: #69747f;
+    --accent: #5cb2d6;
+    --accent-2: #7cc6e5;
+    --crit: #ef8a7e;
+    --crit-bg: #2c1a17;
+    --crit-line: #b45144;
+    --warn: #e2b662;
+    --warn-bg: #271f12;
+    --warn-line: #8a6c2e;
+    --safe: #74c591;
+    --safe-bg: #14241b;
   }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
 }

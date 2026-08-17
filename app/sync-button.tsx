@@ -124,13 +124,23 @@ export function SyncButton() {
   }
 
   return (
-    <div className="flex flex-col items-center gap-2">
-      <div className="flex gap-3">
-        <button type="button" onClick={handleClick} disabled={running} className="underline">
-          {running ? "Syncing..." : "Sync now"}
+    <div className="flex flex-col items-start gap-2">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={handleClick}
+          disabled={running}
+          className="inline-flex h-8 items-center gap-2 rounded-md bg-accent px-3.5 text-[13px] font-semibold text-white shadow-sm hover:bg-accent-2 disabled:cursor-not-allowed disabled:opacity-70"
+        >
+          <span className="h-1.5 w-1.5 rounded-full bg-white/90" aria-hidden="true" />
+          {running ? "Syncing…" : "Sync now"}
         </button>
         {running && (
-          <button type="button" onClick={handleStop} className="underline">
+          <button
+            type="button"
+            onClick={handleStop}
+            className="inline-flex h-8 items-center rounded-md border border-border-strong bg-surface px-3 text-[13px] font-semibold text-foreground hover:border-accent hover:text-accent"
+          >
             Stop
           </button>
         )}
@@ -139,7 +149,7 @@ export function SyncButton() {
       {(status.kind === "running" ||
         status.kind === "done" ||
         status.kind === "stopped") && (
-        <p className="text-sm text-gray-500">
+        <p className="font-mono text-xs tabular-nums text-ink-2">
           {status.messagesScanned}
           {status.resultSizeEstimate !== null
             ? ` of ~${status.resultSizeEstimate}`
@@ -149,14 +159,12 @@ export function SyncButton() {
         </p>
       )}
       {status.kind === "not-connected" && (
-        <p className="text-sm text-red-600">
-          Google connection expired or was revoked - sign out and sign back
+        <p className="text-xs text-crit">
+          Google connection expired or was revoked — sign out and sign back
           in to reconnect.
         </p>
       )}
-      {status.kind === "error" && (
-        <p className="text-sm text-red-600">Sync failed - try again.</p>
-      )}
+      {status.kind === "error" && <p className="text-xs text-crit">Sync failed — try again.</p>}
     </div>
   );
 }
