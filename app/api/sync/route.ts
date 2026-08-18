@@ -5,8 +5,11 @@
 // (app/sync-button.tsx) drives a loop of these calls.
 //
 // Route handler stays thin (CLAUDE.md convention): parse input, call lib/
-// functions, format the response. The one Prisma touchpoint beyond that is
-// the upsert itself - orchestration, not business logic.
+// functions, format the response. The purchase upsert/merge itself lives in
+// lib/purchases.ts's upsertPurchaseFromParse (dedups on orderNumber when
+// present, gmailMessageId otherwise - see that file for why) - this route's
+// remaining direct Prisma calls (alreadySynced read, syncRun create/update)
+// are genuinely orchestration-only.
 //
 // IMPORTANT: never log email content - message IDs, retailer names, and
 // counts only, same discipline as lib/gmail.ts and lib/parse.ts.
@@ -21,6 +24,7 @@ import {
   GmailNotConnectedError,
 } from "@/lib/gmail";
 import { parseCandidateEmail } from "@/lib/parse";
+import { upsertPurchaseFromParse } from "@/lib/purchases";
 
 // One page is SYNC_PAGE_SIZE (20) messages; worst case all 20 miss Tier 1
 // and hit Tier 2 (one OpenAI call each) - comfortably inside 300s today.
@@ -58,42 +62,7 @@ async function processMessage(
     const result = await parseCandidateEmail(message);
     if (!result || !result.isPurchase) return false;
 
-    // update never touches status - a re-sync matching an existing
-    // gmailMessageId must not silently undo a user's RETURNED/KEEPING
-    // choice (item 6, not built yet). Only create sets it, to the schema
-    // default.
-    await prisma.purchase.upsert({
-      where: {
-        userId_gmailMessageId: { userId, gmailMessageId: messageId },
-      },
-      update: {
-        retailer: result.retailer,
-        itemName: result.itemName,
-        orderDate: new Date(result.orderDate),
-        price: result.price,
-        currency: result.currency,
-        orderNumber: result.orderNumber,
-        returnDeadline: result.returnDeadline
-          ? new Date(result.returnDeadline)
-          : null,
-        rawParseJson: result,
-      },
-      create: {
-        userId,
-        gmailMessageId: messageId,
-        retailer: result.retailer,
-        itemName: result.itemName,
-        orderDate: new Date(result.orderDate),
-        price: result.price,
-        currency: result.currency,
-        orderNumber: result.orderNumber,
-        returnDeadline: result.returnDeadline
-          ? new Date(result.returnDeadline)
-          : null,
-        rawParseJson: result,
-      },
-    });
-    return true;
+    return await upsertPurchaseFromParse(userId, messageId, result);
   } catch (err) {
     if (err instanceof GmailNotConnectedError) throw err;
     console.log("sync: per-message step failed", {

@@ -78,7 +78,11 @@ model Purchase {
   user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   reminders Reminder[]
 
-  @@unique([userId, gmailMessageId]) // idempotency key
+  @@unique([userId, gmailMessageId]) // idempotency key when orderNumber is absent
+  @@unique([userId, orderNumber]) // idempotency key when present - the real-
+  // world order identity, stronger than one email about it (lib/purchases.ts
+  // upsertPurchaseFromParse). Postgres treats multiple NULLs as distinct, so
+  // orderNumber-less rows are unaffected and keep deduping on gmailMessageId.
   @@index([userId, returnDeadline]) // list sort + cron scan
 }
 

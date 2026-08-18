@@ -30,3 +30,8 @@ export const parseResultSchema = z.discriminatedUnion("isPurchase", [
 ]);
 
 export type ParseResult = z.infer<typeof parseResultSchema>;
+
+// The "hit" branch of ParseResult, shared by lib/parse.ts (both tiers) and
+// lib/purchases.ts (the upsert/merge layer) - single source of truth so
+// neither redeclares it.
+export type PurchaseResult = Extract<ParseResult, { isPurchase: true }>;

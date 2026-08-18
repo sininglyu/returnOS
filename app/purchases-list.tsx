@@ -163,7 +163,7 @@ function Row({ purchase, bucket, now }: { purchase: Purchase; bucket: Bucket; no
             )}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-4">
+        <div className="ml-auto flex shrink-0 items-center gap-4">
           {price && (
             <span className="font-mono text-sm font-semibold tabular-nums text-foreground">
               {price}

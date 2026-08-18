@@ -10,7 +10,8 @@
     "typecheck": "next typegen && tsc --noEmit",
     "db:generate": "prisma generate",
     "db:validate": "prisma validate",
-    "db:seed": "prisma db seed"
+    "db:seed": "prisma db seed",
+    "dedupe-purchases": "tsx scripts/dedupe-purchases.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.41",

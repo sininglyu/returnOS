@@ -8,13 +8,15 @@
 // message IDs, retailer names, and parse outcomes only.
 
 import type { GmailMessage } from "./gmail";
-import { parseResultSchema, type ParseResult } from "./schemas";
+import {
+  parseResultSchema,
+  type ParseResult,
+  type PurchaseResult,
+} from "./schemas";
 import { extractStructuredPurchase } from "./structuredData";
 import { parseEmailWithOpenAI } from "./openai";
 import { getRetailerPolicy } from "./retailers";
 import { addDaysUTC } from "./dates";
-
-type PurchaseResult = Extract<ParseResult, { isPurchase: true }>;
 
 // Shared tail for both tiers: apply the retailer-policy fallback when the
 // email itself didn't state a return deadline, then log the hit. Kept as
